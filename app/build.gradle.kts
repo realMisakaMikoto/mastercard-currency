@@ -3,14 +3,35 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// The release keystore is deliberately NOT part of the repository (see .gitignore):
-// publishing a signing key would let anyone produce an APK that Android treats as an
-// update to an installed copy. A fresh clone still builds -- `assembleRelease` then
-// emits an unsigned APK, and the debug build is unaffected.
-val keystoreFile = rootProject.file("keystore/mcfx-release.jks")
-val keystorePassword = providers.gradleProperty("MCFX_STORE_PASSWORD").getOrElse("mcfx123456")
-val keystoreAlias = providers.gradleProperty("MCFX_KEY_ALIAS").getOrElse("mcfx")
-val keystoreKeyPassword = providers.gradleProperty("MCFX_KEY_PASSWORD").getOrElse("mcfx123456")
+// Release signing.
+//
+// There is deliberately no default password: a real signing credential must never
+// live in the repository. Put these in ~/.gradle/gradle.properties (never in the
+// project, and never on the command line, where it lands in shell history):
+//
+//   MCFX_STORE_FILE=/abs/path/release.jks   (optional; defaults to keystore/mcfx-release.jks)
+//   MCFX_STORE_PASSWORD=...
+//   MCFX_KEY_ALIAS=...
+//   MCFX_KEY_PASSWORD=...
+//
+// No keystore -> unsigned release APK (a fresh clone still builds).
+// Keystore present but credentials missing -> fail loudly rather than ship unsigned.
+val keystorePath = providers.gradleProperty("MCFX_STORE_FILE").getOrElse("keystore/mcfx-release.jks")
+val keystoreFile = rootProject.file(keystorePath)
+val keystorePassword = providers.gradleProperty("MCFX_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+val keystoreAlias = providers.gradleProperty("MCFX_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
+val keystoreKeyPassword = providers.gradleProperty("MCFX_KEY_PASSWORD").orNull?.takeIf { it.isNotBlank() }
+
+val hasKeystore = keystoreFile.isFile
+val hasSigningCredentials = keystorePassword != null && keystoreAlias != null && keystoreKeyPassword != null
+
+if (hasKeystore && !hasSigningCredentials) {
+    throw GradleException(
+        "Found a release keystore at '$keystorePath' but signing credentials are incomplete. " +
+            "Add MCFX_STORE_PASSWORD, MCFX_KEY_ALIAS and MCFX_KEY_PASSWORD to " +
+            "~/.gradle/gradle.properties, or remove the keystore to build an unsigned release APK.",
+    )
+}
 
 android {
     namespace = "com.vibecoding.mcfx"
@@ -20,8 +41,8 @@ android {
         applicationId = "com.vibecoding.mcfx"
         minSdk = 26
         targetSdk = 37
-        versionCode = 7
-        versionName = "1.4.0"
+        versionCode = 8
+        versionName = "1.5.0"
     }
 
     androidResources {
@@ -29,7 +50,7 @@ android {
     }
 
     signingConfigs {
-        if (keystoreFile.isFile) {
+        if (hasKeystore && hasSigningCredentials) {
             create("release") {
                 storeFile = keystoreFile
                 storePassword = keystorePassword
@@ -44,7 +65,7 @@ android {
             // v1: keep minification off so the artifact is guaranteed to build and debuggable.
             isMinifyEnabled = false
             isShrinkResources = false
-            // null when the keystore is absent -> Gradle emits an unsigned release APK.
+            // null when there is no keystore -> Gradle emits an unsigned release APK.
             signingConfig = signingConfigs.findByName("release")
         }
     }
