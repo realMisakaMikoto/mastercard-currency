@@ -8,6 +8,7 @@ import com.vibecoding.mcfx.data.CurrencyRepository
 import com.vibecoding.mcfx.data.FetchAttempt
 import com.vibecoding.mcfx.data.RateRequest
 import com.vibecoding.mcfx.data.RateResult
+import com.vibecoding.mcfx.logic.QueryGate
 import com.vibecoding.mcfx.logic.RateMath
 import com.vibecoding.mcfx.net.HttpFetcher
 import com.vibecoding.mcfx.net.MockFetcher
@@ -159,9 +160,15 @@ class ConverterViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Swapping while a lookup is in flight would start a second request for the new
+     * pair and race the first one, so during Loading the pair is swapped visually
+     * but no query is issued -- the user presses 查询 when ready.
+     */
     fun swap() {
+        val loading = _state.value.status is QueryStatus.Loading
         _state.update { it.copy(fromCode = it.toCode, toCode = it.fromCode, status = QueryStatus.Idle) }
-        query()
+        if (!loading) query()
     }
 
     fun openDatePicker() = _state.update { it.copy(showDatePicker = true) }
@@ -208,14 +215,24 @@ class ConverterViewModel(app: Application) : AndroidViewModel(app) {
 
     fun query() {
         val current = _state.value
-        val amount = RateMath.parseDecimal(current.amountText)
-        if (amount == null || amount.signum() <= 0) {
-            _state.update { it.copy(notice = "请输入大于 0 的金额") }
-            return
-        }
-        if (current.fromCode == current.toCode) {
-            _state.update { it.copy(notice = "源货币与目标货币相同，请重新选择") }
-            return
+
+        // One lookup at a time. Rapid taps (or a tap landing while prewarm runs)
+        // would otherwise queue several requests whose answers can arrive out of
+        // order and be shown for the wrong inputs.
+        val amount = when (
+            val gate = QueryGate.check(
+                loading = current.status is QueryStatus.Loading,
+                rawAmount = RateMath.parseDecimal(current.amountText),
+                fromCode = current.fromCode,
+                toCode = current.toCode,
+            )
+        ) {
+            QueryGate.Result.AlreadyRunning -> return
+            is QueryGate.Result.Invalid -> {
+                _state.update { it.copy(notice = gate.message) }
+                return
+            }
+            is QueryGate.Result.Ready -> gate.amount
         }
         val fee = current.bankFeeText.takeIf { it.isNotBlank() }
             ?.let(RateMath::parseDecimal) ?: BigDecimal.ZERO

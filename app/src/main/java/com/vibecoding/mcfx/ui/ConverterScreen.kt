@@ -454,7 +454,11 @@ private fun ConverterContent(
             Spacer(Modifier.height(10.dp))
 
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                SwapButton(onClick = onSwap, enabled = state.fromCode != state.toCode, turns = swapTurns)
+                SwapButton(
+                    onClick = onSwap,
+                    enabled = state.fromCode != state.toCode && !inlineLoading,
+                    turns = swapTurns,
+                )
             }
 
             Spacer(Modifier.height(10.dp))
@@ -676,7 +680,7 @@ private fun ConverterContent(
 
             PrimaryButton(
                 text = "查询汇率",
-                loading = false,
+                loading = inlineLoading,
                 enabled = state.fromCode != state.toCode,
                 onClick = vm::query,
             )

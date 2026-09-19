@@ -16,6 +16,8 @@ import com.vibecoding.mcfx.logic.MastercardEndpoints
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
@@ -52,6 +54,32 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
     private var resultDeferred: CompletableDeferred<String>? = null
     private var scriptDeferred: CompletableDeferred<String>? = null
 
+    /**
+     * Serialises everything that touches the WebView. `prewarm()` (fired at startup)
+     * and `fetch()` (fired by the user) would otherwise drive the same WebView
+     * concurrently, and a fast user can start a second lookup while the first is
+     * still in flight -- both end up completing each other's Deferred and the app
+     * shows one query's rate for another query's inputs.
+     */
+    private val operationMutex = Mutex()
+
+    /**
+     * Incremented for every JS round trip. The page echoes it back through the
+     * bridge, so a callback that arrives after its timeout cannot complete a later
+     * request's Deferred. Read from the JavaBridge thread, hence @Volatile.
+     */
+    @Volatile
+    private var callbackGeneration = 0L
+
+    /** URL of the navigation currently being awaited, used to reject late finishes. */
+    @Volatile
+    private var pendingPageUrl: String? = null
+
+    private fun nextGeneration(): Long {
+        callbackGeneration += 1
+        return callbackGeneration
+    }
+
     @Volatile
     private var mainFrameStatus: Int = 0
 
@@ -84,12 +112,23 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
     inner class Bridge {
         @JavascriptInterface
         fun onResult(payload: String) {
+            val generation = runCatching { JSONObject(payload).optLong(GEN_KEY, -1L) }.getOrDefault(-1L)
+            if (generation != callbackGeneration) {
+                android.util.Log.i(TAG, "bridge: dropped stale result (gen=$generation current=$callbackGeneration)")
+                return
+            }
             resultDeferred?.complete(payload)
         }
 
         @JavascriptInterface
         fun onValue(value: String) {
-            scriptDeferred?.complete(value)
+            val separator = value.indexOf(GEN_SEPARATOR)
+            val generation = if (separator > 0) value.substring(0, separator).toLongOrNull() ?: -1L else -1L
+            if (generation != callbackGeneration) {
+                android.util.Log.i(TAG, "bridge: dropped stale value (gen=$generation current=$callbackGeneration)")
+                return
+            }
+            scriptDeferred?.complete(if (separator > 0) value.substring(separator + 1) else value)
         }
     }
 
@@ -124,6 +163,14 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
         wv.addJavascriptInterface(bridge, BRIDGE_NAME)
         wv.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
+                val expected = pendingPageUrl ?: return
+                // A late finish from an earlier navigation must not satisfy the one
+                // we are waiting for now.
+                val expectedHost = expected.substringAfter("://").substringBefore('/')
+                if (url != null && !url.contains(expectedHost)) {
+                    android.util.Log.i(TAG, "onPageFinished: ignoring foreign url=$url")
+                    return
+                }
                 pageDeferred?.complete(true)
             }
 
@@ -165,6 +212,11 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
     }
 
     override suspend fun fetch(request: RateRequest, today: LocalDate): FetchResponse =
+        operationMutex.withLock {
+            fetchLocked(request, today)
+        }
+
+    private suspend fun fetchLocked(request: RateRequest, today: LocalDate): FetchResponse =
         withContext(Dispatchers.Main.immediate) {
             val wv = webView
                 ?: return@withContext FetchResponse(
@@ -329,9 +381,16 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
 
         val deferred = CompletableDeferred<Boolean>()
         pageDeferred = deferred
+        pendingPageUrl = url
         wv.loadUrl(url)
 
-        val finished = withTimeoutOrNull(PAGE_TIMEOUT_MS) { deferred.await() } ?: false
+        val finished = try {
+            withTimeoutOrNull(PAGE_TIMEOUT_MS) { deferred.await() } ?: false
+        } finally {
+            // Drop both so a late onPageFinished cannot satisfy a later navigation.
+            if (pageDeferred === deferred) pageDeferred = null
+            if (pendingPageUrl == url) pendingPageUrl = null
+        }
         if (!finished) return PageState(-1, false, "页面加载超时（${PAGE_TIMEOUT_MS / 1000}s）")
 
         val status = mainFrameStatus
@@ -356,7 +415,9 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
      * before the user presses anything. Failure is silent: the next lookup simply
      * loads the page itself.
      */
-    suspend fun prewarm() = withContext(Dispatchers.Main.immediate) {
+    suspend fun prewarm() = operationMutex.withLock { prewarmLocked() }
+
+    private suspend fun prewarmLocked() = withContext(Dispatchers.Main.immediate) {
         val wv = webView ?: return@withContext
         if (pageReady) return@withContext
         val url = MastercardEndpoints.pageUrlFor(MastercardEndpoints.HOST_COM)
@@ -418,19 +479,25 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
     }
 
     private suspend fun evaluate(wv: WebView, script: String, timeoutMs: Long = EVAL_TIMEOUT_MS): String? {
+        val generation = nextGeneration()
         val deferred = CompletableDeferred<String>()
         scriptDeferred = deferred
-        jsonWrap(wv, script)
-        return withTimeoutOrNull(timeoutMs) { deferred.await() }
+        try {
+            jsonWrap(wv, script, generation)
+            return withTimeoutOrNull(timeoutMs) { deferred.await() }
+        } finally {
+            if (scriptDeferred === deferred) scriptDeferred = null
+        }
     }
 
-    private fun jsonWrap(wv: WebView, script: String) {
+    private fun jsonWrap(wv: WebView, script: String, generation: Long) {
         // Route the value back through the JS bridge so the result is a plain
-        // string. Promise results are awaited.
+        // string. Promise results are awaited; the generation prefix lets the
+        // bridge discard callbacks belonging to an earlier request.
         val js = """
 (function () {
-  function send(v) { try { MCFX.onValue(String(v)); } catch (e) {} }
-  function fail(e) { try { MCFX.onValue('ERR ' + (e && e.message ? e.message : e)); } catch (x) {} }
+  function send(v) { try { MCFX.onValue('$generation' + '\u0001' + String(v)); } catch (e) {} }
+  function fail(e) { try { MCFX.onValue('$generation' + '\u0001' + 'ERR ' + (e && e.message ? e.message : e)); } catch (x) {} }
   try {
     var v = ($script);
     if (v && typeof v.then === 'function') { v.then(send, fail); } else { send(v); }
@@ -441,10 +508,15 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
     }
 
     private suspend fun runInPage(wv: WebView, urls: List<String>): String? {
+        val generation = nextGeneration()
         val deferred = CompletableDeferred<String>()
         resultDeferred = deferred
-        wv.evaluateJavascript(buildScript(urls), null)
-        return withTimeoutOrNull(IN_PAGE_TIMEOUT_MS) { deferred.await() }
+        try {
+            wv.evaluateJavascript(buildScript(urls, generation), null)
+            return withTimeoutOrNull(IN_PAGE_TIMEOUT_MS) { deferred.await() }
+        } finally {
+            if (resultDeferred === deferred) resultDeferred = null
+        }
     }
 
     /** True when a payload is a real answer (a usable quote, or JSON we can parse). */
@@ -492,7 +564,7 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
         return out
     }
 
-    private fun buildScript(urls: List<String>): String {
+    private fun buildScript(urls: List<String>, generation: Long): String {
         val urlsJson = JSONArray(urls as Collection<*>).toString()
         return """
 (function () {
@@ -500,6 +572,7 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
   var results = [];
   function done(ok) {
     MCFX.onResult(JSON.stringify({
+      $GEN_KEY: $generation,
       ok: ok,
       status: results.length ? results[results.length - 1].status : -1,
       body: results.length ? results[results.length - 1].body : '',
@@ -533,6 +606,12 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
 
     companion object {
         private const val BRIDGE_NAME = "MCFX"
+
+        /** JSON field carrying the callback generation back from the page. */
+        private const val GEN_KEY = "gen"
+
+        /** Separator in the `onValue` payload: "<generation>\u0001<value>". */
+        private const val GEN_SEPARATOR = '\u0001'
 
         /** logcat tag: `adb logcat -s MCFX`. */
         private const val TAG = "MCFX"
