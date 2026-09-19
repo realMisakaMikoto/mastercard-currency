@@ -235,8 +235,7 @@ private fun ConverterContent(
     // The rate returned by Mastercard does not depend on the amount, so the
     // converted amount is derived from whatever is in the amount box right now --
     // editing the amount re-converts instantly, the way Google's converter does.
-    // Rounding and display follow the TARGET currency's ISO 4217 precision.
-    val targetMinorUnits = to?.minorUnits ?: Currency.DEFAULT_MINOR_UNITS
+    // Nothing is rounded: every decimal of the exact product is shown.
     val amount = RateMath.parseDecimal(state.amountText)
     val liveAmount = amount?.takeIf { it.signum() > 0 }
     val amountUnchanged = liveAmount != null && liveAmount == success?.request?.amount
@@ -244,15 +243,13 @@ private fun ConverterContent(
         when {
             // An untouched query shows exactly what Mastercard returned.
             amountUnchanged && r.quote.crdhldBillAmt.signum() >= 0 -> r.quote.crdhldBillAmt
-            liveAmount != null -> RateMath.billedAmount(liveAmount, r.quote.conversionRate, targetMinorUnits)
+            liveAmount != null -> RateMath.billedAmount(liveAmount, r.quote.conversionRate)
             else -> null
         }
     }
     val baseRate = success?.let { RateMath.baseRate(it.quote.conversionRate, it.request.bankFeePercent) }
     val feeAmount = success?.let { r ->
-        liveAmount?.let {
-            RateMath.feeAmount(it, r.quote.conversionRate, r.request.bankFeePercent, targetMinorUnits)
-        }
+        liveAmount?.let { RateMath.feeAmount(it, r.quote.conversionRate, r.request.bankFeePercent) }
     }
     /** True when the amount box no longer matches the amount that was fetched. */
     val amountEditedLive = success != null && liveAmount != null && !amountUnchanged
@@ -484,7 +481,7 @@ private fun ConverterContent(
                 // amount box keystroke by keystroke, and animating every digit
                 // change would flicker.
                 Text(
-                    text = billed?.let { RateMath.formatMoney(it, targetMinorUnits) } ?: "—",
+                    text = billed?.let(RateMath::formatExact) ?: "—",
                     fontSize = 28.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = if (billed != null) WiseInk else WiseInkFaint,
@@ -517,14 +514,14 @@ private fun ConverterContent(
                     if (success.request.bankFeePercent.signum() > 0 && feeAmount != null) {
                         BreakdownRow(
                             label = "银行手续费 ${RateMath.formatRate(success.request.bankFeePercent)}%",
-                            value = RateMath.formatMoney(feeAmount, targetMinorUnits),
+                            value = RateMath.formatExact(feeAmount),
                         )
                     }
                     HairlineDivider(color = WiseBorder)
                     Spacer(Modifier.height(6.dp))
                     BreakdownRow(
                         label = "合计（${success.quote.crdhldBillCurr}）",
-                        value = billed?.let { RateMath.formatMoney(it, targetMinorUnits) } ?: "-",
+                        value = billed?.let(RateMath::formatExact) ?: "-",
                         emphasised = true,
                     )
                 }

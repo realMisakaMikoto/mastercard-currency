@@ -83,49 +83,34 @@ class CurrencyMinorUnitsTest {
             ?: error("currencies.json not found from ${File(".").absolutePath}")
     }
 
-    // ------------------------------------------------------------- rounding
+    // ------------------------------------------------------- exact results
+
+    // The converted amount is deliberately NOT rounded to the currency's minor
+    // units any more: the exact product is shown instead, so multiplying the
+    // displayed rate by the displayed amount reproduces the displayed total.
 
     @Test
-    fun `zero-decimal currency rounds to a whole unit`() {
-        // 123.5 JPY -> 124
+    fun `conversion keeps the full product regardless of currency precision`() {
         assertEquals(
-            "124",
-            RateMath.billedAmount(BigDecimal("123.5"), BigDecimal.ONE, 0).toPlainString(),
+            "123.5",
+            RateMath.billedAmount(BigDecimal("123.5"), BigDecimal.ONE).toPlainString(),
+        )
+        assertEquals(
+            "123.4567",
+            RateMath.billedAmount(BigDecimal("123.4567"), BigDecimal.ONE).toPlainString(),
+        )
+        assertEquals(
+            "426.80000",
+            RateMath.billedAmount(BigDecimal("10000"), BigDecimal("0.04268")).toPlainString(),
         )
     }
 
     @Test
-    fun `three-decimal currency keeps three decimals`() {
-        // 123.4567 KWD -> 123.457
-        assertEquals(
-            "123.457",
-            RateMath.billedAmount(BigDecimal("123.4567"), BigDecimal.ONE, 3).toPlainString(),
-        )
-    }
-
-    @Test
-    fun `two-decimal currency is unchanged from before`() {
-        assertEquals(
-            "426.80",
-            RateMath.billedAmount(BigDecimal("10000"), BigDecimal("0.04268"), 2).toPlainString(),
-        )
-    }
-
-    @Test
-    fun `conversion uses the target precision`() {
-        // 10000 USD * 0.1493451 -> JPY has no minor unit
-        assertEquals(
-            "1493",
-            RateMath.billedAmount(BigDecimal("10000"), BigDecimal("0.1493451"), 0).toPlainString(),
-        )
-        assertEquals(
-            "1493.45",
-            RateMath.billedAmount(BigDecimal("10000"), BigDecimal("0.1493451"), 2).toPlainString(),
-        )
-        assertEquals(
-            "1493.451",
-            RateMath.billedAmount(BigDecimal("10000"), BigDecimal("0.1493451"), 3).toPlainString(),
-        )
+    fun `exact display keeps every digit and trims only trailing zeros`() {
+        assertEquals("1,234", RateMath.formatExact(BigDecimal("1234")))
+        assertEquals("1,234.567", RateMath.formatExact(BigDecimal("1234.5670")))
+        assertEquals("1,493.451", RateMath.formatExact(BigDecimal("1493.4510")))
+        assertEquals("1,581,100", RateMath.formatExact(BigDecimal("1581100.0000000")))
     }
 
     // ----------------------------------------------------------- formatting
@@ -154,22 +139,24 @@ class CurrencyMinorUnitsTest {
     // ------------------------------------------------------------------ fee
 
     @Test
-    fun `fee amount honours the target precision`() {
+    fun `zero fee yields an exact zero`() {
         assertEquals(
-            "0",
-            RateMath.feeAmount(BigDecimal("10000"), BigDecimal("0.1493451"), BigDecimal.ZERO, 0)
-                .toPlainString(),
-        )
-        assertEquals(
-            "0.000",
-            RateMath.feeAmount(BigDecimal("10000"), BigDecimal("0.1493451"), BigDecimal.ZERO, 3)
-                .toPlainString(),
+            0,
+            RateMath.feeAmount(BigDecimal("10000"), BigDecimal("0.1493451"), BigDecimal.ZERO)
+                .signum(),
         )
     }
 
     @Test
-    fun `fee with a surcharge keeps the target scale`() {
-        val fee = RateMath.feeAmount(BigDecimal("10000"), BigDecimal("0.0438524"), BigDecimal("2"), 0)
-        assertEquals(0, fee.scale())
+    fun `fee with a surcharge is not rounded`() {
+        val fee = RateMath.feeAmount(BigDecimal("10000"), BigDecimal("0.0438524"), BigDecimal("2"))
+        assertTrue("fee must be positive", fee.signum() > 0)
+        // Exact difference between billed and the same amount at the un-fee'd rate.
+        val expected = BigDecimal("10000").multiply(BigDecimal("0.0438524"))
+            .subtract(
+                BigDecimal("10000")
+                    .multiply(RateMath.baseRate(BigDecimal("0.0438524"), BigDecimal("2"))),
+            )
+        assertEquals(0, fee.compareTo(expected))
     }
 }

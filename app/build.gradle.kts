@@ -41,8 +41,8 @@ android {
         applicationId = "com.vibecoding.mcfx"
         minSdk = 26
         targetSdk = 37
-        versionCode = 9
-        versionName = "1.5.1"
+        versionCode = 10
+        versionName = "1.5.2"
     }
 
     androidResources {

@@ -21,13 +21,16 @@ object RateMath {
     /** ISO 4217 default when a currency's precision is unknown. */
     const val DEFAULT_MINOR_UNITS = 2
 
-    /** Amount the cardholder is billed: amount x returned rate, rounded to the currency's precision. */
-    fun billedAmount(
-        amount: BigDecimal,
-        conversionRate: BigDecimal,
-        targetMinorUnits: Int = DEFAULT_MINOR_UNITS,
-    ): BigDecimal = amount.multiply(conversionRate)
-        .setScale(targetMinorUnits.coerceIn(0, 6), RoundingMode.HALF_UP)
+    /**
+     * Amount the cardholder is billed: the EXACT product `amount x rate`, with no
+     * rounding at all.
+     *
+     * Rounding to a currency's minor units was removed on request: the figure on
+     * screen is now the exact product, so multiplying the displayed rate by the
+     * displayed amount always reproduces the displayed total.
+     */
+    fun billedAmount(amount: BigDecimal, conversionRate: BigDecimal): BigDecimal =
+        amount.multiply(conversionRate)
 
     /** Strips the bank fee back out of the returned rate. */
     fun baseRate(conversionRate: BigDecimal, bankFeePercent: BigDecimal): BigDecimal {
@@ -38,23 +41,28 @@ object RateMath {
         return conversionRate.divide(divisor, RATE_SCALE, RoundingMode.HALF_UP)
     }
 
-    /** Fee portion of the bill, in the target currency. */
+    /**
+     * Fee portion of the bill, in the target currency: the exact difference between
+     * the billed total and the same amount at the un-fee'd rate. Not rounded, so the
+     * breakdown still adds up against the total.
+     */
     fun feeAmount(
         amount: BigDecimal,
         conversionRate: BigDecimal,
         bankFeePercent: BigDecimal,
-        targetMinorUnits: Int = DEFAULT_MINOR_UNITS,
     ): BigDecimal {
-        val scale = targetMinorUnits.coerceIn(0, 6)
-        if (bankFeePercent.signum() <= 0) return BigDecimal.ZERO.setScale(scale)
-        val billed = billedAmount(amount, conversionRate, scale)
+        if (bankFeePercent.signum() <= 0) return BigDecimal.ZERO
+        val billed = billedAmount(amount, conversionRate)
         val unFee = amount.multiply(baseRate(conversionRate, bankFeePercent))
-        return billed.subtract(unFee).setScale(scale, RoundingMode.HALF_UP)
+        return billed.subtract(unFee)
     }
 
     /**
-     * "10,000.00" for a 2-decimal currency, "10,000" for JPY, "10,000.000" for KWD.
-     * The target currency's precision is never trimmed away.
+     * Fixed-precision display, e.g. "10,000.00" for a 2-decimal currency, "10,000"
+     * for JPY, "10,000.000" for KWD.
+     *
+     * Kept because the currency dataset carries real ISO 4217 precision. The
+     * converted amount no longer uses it -- see [formatExact].
      */
     fun formatMoney(value: BigDecimal, minorUnits: Int = DEFAULT_MINOR_UNITS): String {
         val scale = minorUnits.coerceIn(0, 6)
@@ -69,13 +77,27 @@ object RateMath {
         return DecimalFormat(pattern, DecimalFormatSymbols.getInstance(Locale.US)).format(value)
     }
 
-    /** Rate display: up to 6 decimals, trailing zeros trimmed. */
-    fun formatRate(value: BigDecimal): String {
-        val rounded = value.setScale(6, RoundingMode.HALF_UP).stripTrailingZeros()
-        val decimals = maxOf(rounded.scale(), 0)
+    /**
+     * Shows every decimal digit the value carries, trimming only TRAILING ZEROS.
+     *
+     * Nothing is rounded away, so 10000 x 0.04268 renders as "426.80000" rather than
+     * "426.80", and a 7-decimal Mastercard rate stays a 7-decimal multiplier.
+     */
+    fun formatExact(value: BigDecimal): String {
+        val stripped = value.stripTrailingZeros()
+        val decimals = maxOf(stripped.scale(), 0)
         val pattern = if (decimals == 0) "#,##0" else "#,##0." + "#".repeat(decimals)
-        return DecimalFormat(pattern, DecimalFormatSymbols.getInstance(Locale.US)).format(rounded)
+        return DecimalFormat(pattern, DecimalFormatSymbols.getInstance(Locale.US)).format(stripped)
     }
+
+    /**
+     * Rate display: every decimal the service returned, trailing zeros trimmed.
+     *
+     * There is deliberately no fixed cap. Truncating the rate (it used to be cut to
+     * 6 decimals while Mastercard returns 7) made a hand calculation with the
+     * on-screen rate disagree with the on-screen total.
+     */
+    fun formatRate(value: BigDecimal): String = formatExact(value)
 
     /** Inverse rate for the "1 TARGET = x SOURCE" helper line. */
     fun inverseRate(conversionRate: BigDecimal): BigDecimal =
