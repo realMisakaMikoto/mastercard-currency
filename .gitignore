@@ -1,0 +1,18 @@
+*.iml
+.gradle/
+.kotlin/
+.idea/
+build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.hprof
+
+# Signing key -- must never be published (see README).
+keystore/
+
+# Raw source download; the packaged copy lives in app/src/main/assets/.
+Mastercard Logo.gif

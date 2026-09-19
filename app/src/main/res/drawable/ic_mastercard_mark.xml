@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Mastercard brand mark: two interlocking circles.
+  Geometry is exact: radius r, centre distance d = r, so the intersection
+  points sit at x = centre, y = centreY +/- sqrt(r^2 - (r/2)^2).
+    r = 24, d = 24  ->  half chord = sqrt(576 - 144) = 20.7846
+    centres (38,50) and (62,50), intersections (50, 29.2154) and (50, 70.7846)
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <path
+        android:fillColor="#EB001B"
+        android:pathData="M14,50 A24,24 0 0 1 62,50 A24,24 0 0 1 14,50 Z" />
+    <path
+        android:fillColor="#F79E1B"
+        android:pathData="M38,50 A24,24 0 0 1 86,50 A24,24 0 0 1 38,50 Z" />
+    <path
+        android:fillColor="#FF5F00"
+        android:pathData="M50,29.2154 A24,24 0 0 1 50,70.7846 A24,24 0 0 1 50,29.2154 Z" />
+</vector>

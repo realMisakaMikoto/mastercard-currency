@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="mc_red">#EB001B</color>
+    <color name="mc_orange">#F79E1B</color>
+    <color name="mc_overlap">#FF5F00</color>
+    <color name="app_background">#FFFFFF</color>
+</resources>
