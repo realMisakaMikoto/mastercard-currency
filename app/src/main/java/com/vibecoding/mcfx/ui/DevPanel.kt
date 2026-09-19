@@ -60,7 +60,13 @@ fun DevPanel(state: UiState, vm: ConverterViewModel) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Row {
-                    TextButton(onClick = { body = sampleFor(vm.state.value) }) { Text("生成示例", fontSize = 12.sp) }                }
+                    TextButton(onClick = { body = sampleFor(vm.state.value) }) {
+                        Text("生成示例", fontSize = 12.sp)
+                    }
+                    TextButton(onClick = vm::probeNativeHttp) {
+                        Text("原生 HTTP 探测", fontSize = 12.sp)
+                    }
+                }
             }
         },
         confirmButton = {

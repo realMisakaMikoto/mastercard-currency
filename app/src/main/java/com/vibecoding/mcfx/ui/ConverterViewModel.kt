@@ -10,6 +10,7 @@ import com.vibecoding.mcfx.data.RateRequest
 import com.vibecoding.mcfx.data.RateResult
 import com.vibecoding.mcfx.logic.QueryGate
 import com.vibecoding.mcfx.logic.RateMath
+import com.vibecoding.mcfx.logic.RateParser
 import com.vibecoding.mcfx.net.HttpFetcher
 import com.vibecoding.mcfx.net.MockFetcher
 import com.vibecoding.mcfx.net.RateEngine
@@ -65,7 +66,6 @@ class ConverterViewModel(app: Application) : AndroidViewModel(app) {
     private val webViewFetcher = WebViewFetcher(app)
     private val httpFetcher = HttpFetcher()
     private val engine = RateEngine(mockFetcher, webViewFetcher, httpFetcher)
-
     val currencies: List<Currency> = repository.all()
 
     private val _state = MutableStateFlow(UiState())
@@ -298,6 +298,38 @@ class ConverterViewModel(app: Application) : AndroidViewModel(app) {
                 ),
                 notice = null,
             )
+        }
+    }
+
+    /**
+     * Diagnostics only: what does a plain HTTPS client get? Normally 403, which is
+     * exactly why the native layer is no longer part of a production lookup.
+     */
+    fun probeNativeHttp() {
+        val current = _state.value
+        if (current.status is QueryStatus.Loading) return
+        val request = RateRequest(
+            fromCode = current.fromCode,
+            toCode = current.toCode,
+            amount = RateMath.parseDecimal(current.amountText) ?: BigDecimal.ONE,
+            requestedDate = current.dateText.takeIf { it.isNotBlank() },
+            bankFeePercent = BigDecimal.ZERO,
+        )
+        _state.update { it.copy(status = QueryStatus.Loading(acquiringSession = false), notice = null) }
+        viewModelScope.launch {
+            val summary = runCatching { httpFetcher.probe(request, LocalDate.now()) }
+                .map { response ->
+                    when (val outcome = RateParser.parse(response.body)) {
+                        is RateParser.Outcome.Quote -> "原生 HTTP 探测：成功（${outcome.quote.conversionRate}）"
+                        is RateParser.Outcome.ApiError ->
+                            "原生 HTTP 探测：HTTP ${response.status}，${outcome.message.take(60)}"
+                        is RateParser.Outcome.Malformed ->
+                            "原生 HTTP 探测：HTTP ${response.status}（${outcome.message.take(60)}）"
+                    }
+                }
+                .getOrElse { "原生 HTTP 探测失败：${it.message}" }
+            android.util.Log.i("MCFX", "native probe: $summary")
+            _state.update { it.copy(status = QueryStatus.Idle, notice = summary) }
         }
     }
 

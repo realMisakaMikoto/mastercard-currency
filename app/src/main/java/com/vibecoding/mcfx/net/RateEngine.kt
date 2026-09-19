@@ -40,7 +40,11 @@ class MockFetcher : RateFetcher {
 class RateEngine(
     private val mockFetcher: MockFetcher,
     private val webViewFetcher: RateFetcher,
-    private val httpFetcher: RateFetcher,
+    /**
+     * Not part of a normal lookup -- kept so the diagnostics panel can still show
+     * what a plain HTTPS client gets (normally 403).
+     */
+    val httpFetcher: RateFetcher,
 ) {
 
     /** When true (dev panel), every lookup replays [MockFetcher.mockBody]. */
@@ -60,7 +64,14 @@ class RateEngine(
         val layers: List<RateFetcher> = if (useMock) {
             listOf(mockFetcher)
         } else {
-            listOf(webViewFetcher, httpFetcher)
+            // Only the WebView layer runs a production lookup.
+            //
+            // HttpFetcher used to run second and was effectively useless: the rate
+            // endpoint answers a bare client with 403 unless the request carries the
+            // page's Akamai cookies, which only the WebView has. All it achieved was
+            // making the user wait through more connection timeouts after the WebView
+            // had already failed. It stays in the codebase as a diagnostics probe.
+            listOf(webViewFetcher)
         }
 
         for (fetcher in layers) {

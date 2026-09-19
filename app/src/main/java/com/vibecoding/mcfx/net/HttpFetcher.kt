@@ -24,6 +24,43 @@ class HttpFetcher : RateFetcher {
 
     override val layer: FetchLayer = FetchLayer.NATIVE_HTTP
 
+    /**
+     * Single-request probe for the diagnostics panel. It hits ONE candidate URL per
+     * host and stops at the first 403 / deny page, so a probe costs a couple of
+     * seconds instead of walking the whole candidate list.
+     *
+     * This is deliberately not part of a production lookup.
+     */
+    suspend fun probe(request: RateRequest, today: LocalDate): FetchResponse =
+        withContext(Dispatchers.IO) {
+            val attempts = mutableListOf<FetchAttempt>()
+            for (host in MastercardEndpoints.HOSTS) {
+                val url = MastercardEndpoints.candidateUrls(host, request, today).firstOrNull()
+                    ?: continue
+                val result = try {
+                    get(url, host, connectTimeoutMs = PROBE_TIMEOUT_MS, readTimeoutMs = PROBE_TIMEOUT_MS)
+                } catch (error: Throwable) {
+                    attempts += FetchAttempt(url, -1, "探测异常：${error.message}", FetchLayer.NATIVE_HTTP)
+                    continue
+                }
+                attempts += FetchAttempt(url, result.status, result.body.take(400), FetchLayer.NATIVE_HTTP)
+
+                if (result.status == 200 && RateParser.parse(result.body) is RateParser.Outcome.Quote) {
+                    return@withContext FetchResponse(FetchLayer.NATIVE_HTTP, 200, result.body, attempts)
+                }
+                // 403 means the edge refused this client outright; more attempts will
+                // only repeat that, so stop.
+                if (result.status == 403 || result.body.contains("Access Denied", ignoreCase = true)) break
+            }
+            val last = attempts.lastOrNull()
+            FetchResponse(
+                layer = FetchLayer.NATIVE_HTTP,
+                status = last?.status ?: -1,
+                body = last?.bodySnippet ?: "",
+                attempts = attempts,
+            )
+        }
+
     override suspend fun fetch(request: RateRequest, today: LocalDate): FetchResponse =
         withContext(Dispatchers.IO) {
             val attempts = mutableListOf<FetchAttempt>()
@@ -63,11 +100,16 @@ class HttpFetcher : RateFetcher {
 
     private class HttpResult(val status: Int, val body: String)
 
-    private fun get(url: String, host: String): HttpResult {
+    private fun get(
+        url: String,
+        host: String,
+        connectTimeoutMs: Int = CONNECT_TIMEOUT_MS,
+        readTimeoutMs: Int = READ_TIMEOUT_MS,
+    ): HttpResult {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = CONNECT_TIMEOUT_MS
-            readTimeout = READ_TIMEOUT_MS
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
             instanceFollowRedirects = true
             applyBrowserHeaders(this, host)
         }
@@ -84,6 +126,9 @@ class HttpFetcher : RateFetcher {
     companion object {
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 15_000
+
+        /** Probe budget: short, because it is only a diagnostic. */
+        private const val PROBE_TIMEOUT_MS = 8_000
         private const val MAX_URLS_PER_HOST = 13
 
         const val USER_AGENT =
