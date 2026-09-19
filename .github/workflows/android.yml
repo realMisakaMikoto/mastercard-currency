@@ -1,0 +1,69 @@
+name: Android CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+# Only one run per ref; a newer push cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The runner image ships an Android SDK, but not necessarily the platform this
+      # project compiles against. Install it best-effort; if the package is not in
+      # the repository yet, AGP's own SDK download handles it.
+      - name: Ensure Android SDK platform
+        run: |
+          SDKMANAGER="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" "platforms;android-37" "build-tools;36.0.0" || true
+          else
+            echo "sdkmanager not found; relying on AGP SDK auto-download"
+          fi
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      # Lint reports a lot of historical noise here, so it is deliberately not
+      # blocking while still surfacing findings in the log.
+      - name: Lint (non-blocking)
+        continue-on-error: true
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      # NOTE: this workflow never touches the release keystore or its passwords.
+      # Release APKs are signed on the maintainer's machine only.
