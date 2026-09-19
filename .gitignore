@@ -16,3 +16,6 @@ keystore/
 
 # Raw source download; the packaged copy lives in app/src/main/assets/.
 Mastercard Logo.gif
+
+# Scratch captures -- never commit these
+docs/tmp-*
