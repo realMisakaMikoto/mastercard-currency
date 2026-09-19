@@ -389,7 +389,7 @@ private fun ConverterContent(
                 val subtitle = when {
                     success != null -> buildString {
                         append("汇率日期 ").append(success.effectiveDate)
-                        if (success.dateFellBack) append("（所填日期未发布，已回退）")
+                        if (success.dateFellBack) append("（所选日期未发布，已使用此前最近可用汇率）")
                         if (amountEditedLive) append(" · 按已获取汇率实时换算")
                     }
                     else -> "填写金额后点下方按钮查询"

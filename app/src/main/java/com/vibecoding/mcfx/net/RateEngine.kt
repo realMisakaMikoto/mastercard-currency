@@ -6,6 +6,7 @@ import com.vibecoding.mcfx.data.FetchResponse
 import com.vibecoding.mcfx.data.RateQuote
 import com.vibecoding.mcfx.data.RateRequest
 import com.vibecoding.mcfx.data.RateResult
+import com.vibecoding.mcfx.logic.MastercardEndpoints
 import com.vibecoding.mcfx.logic.RateParser
 import java.time.LocalDate
 
@@ -115,7 +116,18 @@ class RateEngine(
             .firstOrNull { it.bodySnippet.contains("errorMessage") }
             ?.let { extractErrorMessage(it.bodySnippet) }
 
+        // An explicitly chosen date that has no published rate anywhere in its
+        // fallback window must say exactly that. Without this the user would get a
+        // vague validation string and might not realise no rate exists for the date.
+        val explicitDateExhausted = request.requestedDate != null &&
+            statuses.isNotEmpty() &&
+            statuses.none { it in 200..299 } &&
+            !statuses.contains(403) &&
+            !pageRefused
+
         val message = when {
+            explicitDateExhausted ->
+                "该日期及之前 ${MastercardEndpoints.FALLBACK_DAYS} 天内没有可用的万事达结算汇率"
             bestError != null && bestCode != null -> bestError
             apiValidation != null -> "万事达接口拒绝了请求：$apiValidation"
             pageRefused -> PAGE_BLOCKED_HINT

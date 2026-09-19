@@ -51,7 +51,8 @@ class MastercardEndpointsTest {
         val urls = MastercardEndpoints.candidateUrls(MastercardEndpoints.HOST_COM, request, today)
         assertTrue(urls.first().contains("exchange_date=2026-09-18"))
         assertTrue(urls[1].contains("exchange_date=2026-09-17"))
-        assertTrue(urls.any { it.contains("exchange_date=${MastercardEndpoints.LATEST_DATE_SENTINEL}") })
+        // The full date semantics (7-day window, no latest-sentinel for explicit
+        // dates) live in DateFallbackTest.
     }
 
     @Test
@@ -62,12 +63,19 @@ class MastercardEndpointsTest {
     }
 
     @Test
-    fun `legacy settlement path survives only as a fallback`() {
+    fun `legacy settlement paths are kept out of the lookup path`() {
         val urls = MastercardEndpoints.candidateUrls(MastercardEndpoints.HOST_COM, request, today)
-        val legacyIndex = urls.indexOfFirst { it.contains("/settlement/") }
-        val primaryIndex = urls.indexOfFirst { it.contains(MastercardEndpoints.PATH_CONVERSION_RATES) }
-        assertTrue("legacy path should still be tried", legacyIndex >= 0)
-        assertTrue("legacy path must come after the live endpoint", legacyIndex > primaryIndex)
+        assertTrue(
+            "the public converter does not use these paths and Akamai 403s them",
+            urls.none { it.contains("/settlement/") },
+        )
+        // They remain reachable for diagnostics only.
+        val legacy = MastercardEndpoints.diagnosticLegacyUrls(
+            MastercardEndpoints.HOST_COM,
+            request,
+            today,
+        )
+        assertTrue(legacy.isNotEmpty())
     }
 
     @Test

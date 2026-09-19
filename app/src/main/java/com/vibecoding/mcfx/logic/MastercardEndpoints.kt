@@ -63,7 +63,7 @@ object MastercardEndpoints {
     const val LATEST_DATE_SENTINEL = "0000-00-00"
 
     /** Calendar days to walk back when an explicitly chosen date has no rate. */
-    const val FALLBACK_DAYS = 2
+    const val FALLBACK_DAYS = 7
 
     fun pageUrlFor(host: String): String =
         if (host.contains("mastercard.us")) CONVERTER_PAGE_US else CONVERTER_PAGE_CN
@@ -98,17 +98,27 @@ object MastercardEndpoints {
             append("&transAmt=").append(request.amountParam)
         }
 
+    /**
+     * Dates to try for an EXPLICIT date, newest first.
+     *
+     * The sentinel is deliberately absent: walking back from a 2024 date and then
+     * accepting "the latest published rate" would answer a historical question with
+     * today's number. If this window is exhausted the caller reports "no rate",
+     * rather than silently substituting the current rate.
+     */
     fun candidateDates(requested: LocalDate, fallbackDays: Int = FALLBACK_DAYS): List<String> =
         buildList {
             add(requested.toString())
             for (i in 1..fallbackDays) add(requested.minusDays(i.toLong()).toString())
-            add(LATEST_DATE_SENTINEL)
         }
 
     /**
-     * Ordered candidates. An empty date field means "most recent published rate",
-     * matching the official page; an explicit date is honoured first and only then
-     * backed off.
+     * Ordered candidates.
+     *
+     * - empty date field: `0000-00-00` first (the site's own "latest published"
+     *   sentinel), then today as a fallback;
+     * - explicit date: that date, then up to [FALLBACK_DAYS] days earlier. Never the
+     *   sentinel.
      */
     fun candidateUrls(host: String, request: RateRequest, today: LocalDate): List<String> {
         val requested = request.requestedDate?.let(LocalDate::parse)
@@ -121,12 +131,20 @@ object MastercardEndpoints {
             for (date in candidateDates(requested)) urls += rateUrl(host, request, date)
         }
 
-        // Last resort: the credentialed developer path, in case it is ever opened up.
-        urls += legacyUrl(host, RATE_PATH_LEGACY, request, requested?.toString() ?: today.toString())
-        urls += legacyUrl(host, RATE_PATH_LEGACY, request, LATEST_DATE_SENTINEL)
-        urls += legacyUrl(host, RATE_PATH_LEGACY_ALT, request, requested?.toString() ?: today.toString())
-
         return urls.distinct()
+    }
+
+    /**
+     * URLs for the credentialed developer-API paths, kept for the diagnostics
+     * screen only. They are never part of a normal lookup: the public converter does
+     * not use them, and `www.mastercard.com` answers them with Akamai 403.
+     */
+    fun diagnosticLegacyUrls(host: String, request: RateRequest, today: LocalDate): List<String> {
+        val requested = request.requestedDate ?: today.toString()
+        return listOf(
+            legacyUrl(host, RATE_PATH_LEGACY, request, requested),
+            legacyUrl(host, RATE_PATH_LEGACY_ALT, request, requested),
+        )
     }
 
     /** Currency list endpoint, the same one the page fetches to build its dropdowns. */
