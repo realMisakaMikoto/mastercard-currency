@@ -123,6 +123,12 @@ class RateEngine(
 
         val statuses = allAttempts.map { it.status }
         val firstHttpError = statuses.firstOrNull { it in 400..599 }
+        // A page that never arrived (no network, DNS failure, timeout) is NOT the same
+        // as the edge refusing it. Telling an offline user that "Akamai blocked you
+        // based on your client fingerprint" sends them chasing the wrong problem.
+        val pageNeverArrived = allAttempts.any {
+            it.bodySnippet.contains(PAGE_ERROR_MARKER) || it.bodySnippet.contains(PAGE_TIMEOUT_MARKER)
+        }
         val pageRefused = allAttempts.any { it.bodySnippet.contains(PAGE_REFUSED_MARKER) }
         // The service's own validation message is the most actionable signal there is.
         val apiValidation = allAttempts
@@ -136,12 +142,14 @@ class RateEngine(
             statuses.isNotEmpty() &&
             statuses.none { it in 200..299 } &&
             !statuses.contains(403) &&
-            !pageRefused
+            !pageRefused &&
+            !pageNeverArrived
 
         val message = when {
             explicitDateExhausted ->
                 "该日期及之前 ${MastercardEndpoints.FALLBACK_DAYS} 天内没有可用的万事达结算汇率"
             bestError != null && bestCode != null -> bestError
+            pageNeverArrived && !statuses.contains(403) -> OFFLINE_HINT
             apiValidation != null -> "万事达接口拒绝了请求：$apiValidation"
             pageRefused -> PAGE_BLOCKED_HINT
             statuses.contains(403) -> BLOCKED_HINT
@@ -190,6 +198,17 @@ class RateEngine(
 
         /** Written by WebViewFetcher when the converter page itself was refused. */
         const val PAGE_REFUSED_MARKER = "换算页未能正常打开"
+
+        /** Written by WebViewFetcher when the page never arrived (offline, DNS, ...). */
+        const val PAGE_ERROR_MARKER = "换算页加载失败"
+
+        /** Written by WebViewFetcher when the page load ran out of time. */
+        const val PAGE_TIMEOUT_MARKER = "换算页加载超时"
+
+        /** No network / the page never arrived -- do not blame the edge for this. */
+        const val OFFLINE_HINT =
+            "没有取到万事达的换算页，通常是当前网络无法访问 www.mastercard.com（离线、DNS 或连接被阻断）。" +
+                "请检查网络后重试；若已联网仍失败，可点「查看诊断」确认，或改用「手动输入汇率」。"
 
         const val BLOCKED_HINT =
             "万事达边缘返回 HTTP 403（Akamai 安全策略拦截）。请求已送达万事达，但当前会话被判定为风险来源。" +

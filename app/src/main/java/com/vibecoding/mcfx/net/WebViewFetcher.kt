@@ -271,7 +271,7 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
                     attempts += FetchAttempt(
                         url = converterUrl,
                         status = pageState.status,
-                        bodySnippet = "换算页未能正常打开：${pageState.describe()}",
+                        bodySnippet = pageState.failureLabel(),
                         layer = FetchLayer.WEBVIEW_IN_PAGE,
                     )
                     continue
@@ -377,14 +377,29 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
         val error: String?,
         /** True when an already-loaded page was reused instead of reloaded. */
         val reused: Boolean = false,
+        /** True when the wait ran out before the page finished. */
+        val timedOut: Boolean = false,
     ) {
-        val ok: Boolean get() = status in 200..299 && !blocked && error == null
+        val ok: Boolean get() = status in 200..299 && !blocked && error == null && !timedOut
 
         fun describe(): String = when {
             error != null -> error
             blocked -> "HTTP $status（Akamai Access Denied 拦截页）"
+            timedOut -> "页面加载超时（${PAGE_TIMEOUT_MS / 1000}s）"
             status > 0 -> "HTTP $status"
             else -> "未知错误"
+        }
+
+        /**
+         * Machine-readable failure label. The edge refusing the page (HTTP 403 /
+         * deny document) is a completely different problem from the device having no
+         * network, and the UI must not tell an offline user that Akamai blocked them.
+         */
+        fun failureLabel(): String = when {
+            error != null -> "${RateEngine.PAGE_ERROR_MARKER}：$error"
+            blocked -> "${RateEngine.PAGE_REFUSED_MARKER}：${describe()}"
+            timedOut -> "${RateEngine.PAGE_TIMEOUT_MARKER}：${describe()}"
+            else -> "${RateEngine.PAGE_REFUSED_MARKER}：${describe()}"
         }
     }
 
@@ -419,7 +434,7 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
             if (pageDeferred === deferred) pageDeferred = null
             if (pendingPageUrl == url) pendingPageUrl = null
         }
-        if (!finished) return PageState(-1, false, "页面加载超时（${PAGE_TIMEOUT_MS / 1000}s）")
+        if (!finished) return PageState(-1, false, null, timedOut = true)
 
         val status = mainFrameStatus
         val error = mainFrameError
