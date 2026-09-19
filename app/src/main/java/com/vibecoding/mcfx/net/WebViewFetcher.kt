@@ -49,6 +49,8 @@ import java.time.LocalDate
  */
 class WebViewFetcher(private val context: Context) : RateFetcher {
 
+    override val layer: FetchLayer = FetchLayer.WEBVIEW_IN_PAGE
+
     private var webView: WebView? = null
     private var pageDeferred: CompletableDeferred<Boolean>? = null
     private var resultDeferred: CompletableDeferred<String>? = null
@@ -194,6 +196,25 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
                 }
             }
 
+            /**
+             * Keep the session scoped to the pages we actually need. Sub-resources
+             * (CDN, Akamai, OneTrust, analytics) are unaffected -- this only refuses
+             * a TOP-LEVEL navigation away from the Mastercard domains, which would
+             * otherwise let an arbitrary page run against the injected JS bridge.
+             */
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?,
+            ): Boolean {
+                if (request == null) return false
+                val target = request.url?.toString().orEmpty()
+                if (isAllowedMainFrame(target)) return false
+                android.util.Log.i(TAG, "main-frame navigation blocked: $target")
+                // A session established here may no longer be trustworthy.
+                invalidatePage()
+                return true
+            }
+
             /** Records the rate requests the page's own front-end makes. */
             override fun shouldInterceptRequest(
                 view: WebView?,
@@ -205,10 +226,17 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
                 }
                 return null
             }
-
-            // Deliberately no shouldOverrideUrlLoading: the page is allowed to
-            // navigate wherever it needs to, exactly like a normal browser.
         }
+    }
+
+    /**
+     * True for the Mastercard domains and anything under them. Matching the
+     * registrable domain (rather than a literal URL prefix) keeps locale redirects
+     * and consent sub-domains working.
+     */
+    private fun isAllowedMainFrame(url: String): Boolean {
+        val host = runCatching { java.net.URI(url).host ?: "" }.getOrDefault("")
+        return ALLOWED_DOMAINS.any { host == it || host.endsWith(".$it") }
     }
 
     override suspend fun fetch(request: RateRequest, today: LocalDate): FetchResponse =
@@ -612,6 +640,9 @@ class WebViewFetcher(private val context: Context) : RateFetcher {
 
         /** Separator in the `onValue` payload: "<generation>\u0001<value>". */
         private const val GEN_SEPARATOR = '\u0001'
+
+        /** Registrable domains the WebView may navigate to (main frame only). */
+        private val ALLOWED_DOMAINS = listOf("mastercard.com", "mastercard.us")
 
         /** logcat tag: `adb logcat -s MCFX`. */
         private const val TAG = "MCFX"

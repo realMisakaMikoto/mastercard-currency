@@ -22,6 +22,8 @@ import java.time.LocalDate
  */
 class HttpFetcher : RateFetcher {
 
+    override val layer: FetchLayer = FetchLayer.NATIVE_HTTP
+
     override suspend fun fetch(request: RateRequest, today: LocalDate): FetchResponse =
         withContext(Dispatchers.IO) {
             val attempts = mutableListOf<FetchAttempt>()

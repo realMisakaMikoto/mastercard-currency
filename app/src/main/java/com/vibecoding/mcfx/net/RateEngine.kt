@@ -15,6 +15,8 @@ class MockFetcher : RateFetcher {
     @Volatile
     var mockBody: String? = null
 
+    override val layer: FetchLayer = FetchLayer.MOCK
+
     override suspend fun fetch(request: RateRequest, today: LocalDate): FetchResponse {
         val body = mockBody ?: ""
         return FetchResponse(
@@ -69,7 +71,7 @@ class RateEngine(
                     url = fetcher::class.java.simpleName,
                     status = -1,
                     bodySnippet = "取数异常：${error.message}",
-                    layer = FetchLayer.WEBVIEW_IN_PAGE,
+                    layer = fetcher.layer,
                 )
                 continue
             }

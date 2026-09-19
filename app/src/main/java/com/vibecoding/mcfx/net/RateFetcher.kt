@@ -1,5 +1,6 @@
 package com.vibecoding.mcfx.net
 
+import com.vibecoding.mcfx.data.FetchLayer
 import com.vibecoding.mcfx.data.FetchResponse
 import com.vibecoding.mcfx.data.RateRequest
 import java.time.LocalDate
@@ -11,6 +12,11 @@ import java.time.LocalDate
  * the native HTTP fetcher is the fallback when no WebView is usable.
  */
 interface RateFetcher {
+
+    /** Which layer this implementation represents; used for diagnostics. */
+    val layer: FetchLayer
+
     suspend fun fetch(request: RateRequest, today: LocalDate): FetchResponse
+
     fun release() {}
 }
