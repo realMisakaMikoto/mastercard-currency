@@ -16,12 +16,18 @@ import java.util.Locale
  */
 object RateMath {
 
-    const val MONEY_SCALE = 2
     private const val RATE_SCALE = 12
 
-    /** Amount the cardholder is billed: amount x returned rate. */
-    fun billedAmount(amount: BigDecimal, conversionRate: BigDecimal): BigDecimal =
-        amount.multiply(conversionRate).setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+    /** ISO 4217 default when a currency's precision is unknown. */
+    const val DEFAULT_MINOR_UNITS = 2
+
+    /** Amount the cardholder is billed: amount x returned rate, rounded to the currency's precision. */
+    fun billedAmount(
+        amount: BigDecimal,
+        conversionRate: BigDecimal,
+        targetMinorUnits: Int = DEFAULT_MINOR_UNITS,
+    ): BigDecimal = amount.multiply(conversionRate)
+        .setScale(targetMinorUnits.coerceIn(0, 6), RoundingMode.HALF_UP)
 
     /** Strips the bank fee back out of the returned rate. */
     fun baseRate(conversionRate: BigDecimal, bankFeePercent: BigDecimal): BigDecimal {
@@ -33,18 +39,28 @@ object RateMath {
     }
 
     /** Fee portion of the bill, in the target currency. */
-    fun feeAmount(amount: BigDecimal, conversionRate: BigDecimal, bankFeePercent: BigDecimal): BigDecimal {
-        if (bankFeePercent.signum() <= 0) return BigDecimal.ZERO.setScale(MONEY_SCALE)
-        val billed = billedAmount(amount, conversionRate)
+    fun feeAmount(
+        amount: BigDecimal,
+        conversionRate: BigDecimal,
+        bankFeePercent: BigDecimal,
+        targetMinorUnits: Int = DEFAULT_MINOR_UNITS,
+    ): BigDecimal {
+        val scale = targetMinorUnits.coerceIn(0, 6)
+        if (bankFeePercent.signum() <= 0) return BigDecimal.ZERO.setScale(scale)
+        val billed = billedAmount(amount, conversionRate, scale)
         val unFee = amount.multiply(baseRate(conversionRate, bankFeePercent))
-        return billed.subtract(unFee).setScale(MONEY_SCALE, RoundingMode.HALF_UP)
+        return billed.subtract(unFee).setScale(scale, RoundingMode.HALF_UP)
     }
 
-    private fun moneyFormat(): DecimalFormat =
-        DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.US))
-
-    /** "10,000.00" */
-    fun formatMoney(value: BigDecimal): String = moneyFormat().format(value)
+    /**
+     * "10,000.00" for a 2-decimal currency, "10,000" for JPY, "10,000.000" for KWD.
+     * The target currency's precision is never trimmed away.
+     */
+    fun formatMoney(value: BigDecimal, minorUnits: Int = DEFAULT_MINOR_UNITS): String {
+        val scale = minorUnits.coerceIn(0, 6)
+        val pattern = if (scale == 0) "#,##0" else "#,##0." + "0".repeat(scale)
+        return DecimalFormat(pattern, DecimalFormatSymbols.getInstance(Locale.US)).format(value)
+    }
 
     /** Thousands-grouped source amount, trimming a redundant ".00". */
     fun formatAmountInput(value: BigDecimal): String {

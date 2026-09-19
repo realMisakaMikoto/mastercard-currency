@@ -69,6 +69,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.vibecoding.mcfx.data.Currency
 import com.vibecoding.mcfx.logic.MastercardEndpoints
 import com.vibecoding.mcfx.logic.RateMath
 import java.math.BigDecimal
@@ -234,15 +235,27 @@ private fun ConverterContent(
     // The rate returned by Mastercard does not depend on the amount, so the
     // converted amount is derived from whatever is in the amount box right now --
     // editing the amount re-converts instantly, the way Google's converter does.
+    // Rounding and display follow the TARGET currency's ISO 4217 precision.
+    val targetMinorUnits = to?.minorUnits ?: Currency.DEFAULT_MINOR_UNITS
     val amount = RateMath.parseDecimal(state.amountText)
     val liveAmount = amount?.takeIf { it.signum() > 0 }
-    val billed = success?.let { r -> liveAmount?.let { RateMath.billedAmount(it, r.quote.conversionRate) } }
+    val amountUnchanged = liveAmount != null && liveAmount == success?.request?.amount
+    val billed = success?.let { r ->
+        when {
+            // An untouched query shows exactly what Mastercard returned.
+            amountUnchanged && r.quote.crdhldBillAmt.signum() >= 0 -> r.quote.crdhldBillAmt
+            liveAmount != null -> RateMath.billedAmount(liveAmount, r.quote.conversionRate, targetMinorUnits)
+            else -> null
+        }
+    }
     val baseRate = success?.let { RateMath.baseRate(it.quote.conversionRate, it.request.bankFeePercent) }
     val feeAmount = success?.let { r ->
-        liveAmount?.let { RateMath.feeAmount(it, r.quote.conversionRate, r.request.bankFeePercent) }
+        liveAmount?.let {
+            RateMath.feeAmount(it, r.quote.conversionRate, r.request.bankFeePercent, targetMinorUnits)
+        }
     }
     /** True when the amount box no longer matches the amount that was fetched. */
-    val amountEditedLive = success != null && liveAmount != null && liveAmount != success.request.amount
+    val amountEditedLive = success != null && liveAmount != null && !amountUnchanged
 
     var showHelp by remember { mutableStateOf(false) }
 
@@ -471,7 +484,7 @@ private fun ConverterContent(
                 // amount box keystroke by keystroke, and animating every digit
                 // change would flicker.
                 Text(
-                    text = billed?.let(RateMath::formatMoney) ?: "—",
+                    text = billed?.let { RateMath.formatMoney(it, targetMinorUnits) } ?: "—",
                     fontSize = 28.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = if (billed != null) WiseInk else WiseInkFaint,
@@ -504,14 +517,14 @@ private fun ConverterContent(
                     if (success.request.bankFeePercent.signum() > 0 && feeAmount != null) {
                         BreakdownRow(
                             label = "银行手续费 ${RateMath.formatRate(success.request.bankFeePercent)}%",
-                            value = RateMath.formatMoney(feeAmount),
+                            value = RateMath.formatMoney(feeAmount, targetMinorUnits),
                         )
                     }
                     HairlineDivider(color = WiseBorder)
                     Spacer(Modifier.height(6.dp))
                     BreakdownRow(
                         label = "合计（${success.quote.crdhldBillCurr}）",
-                        value = billed?.let(RateMath::formatMoney) ?: "-",
+                        value = billed?.let { RateMath.formatMoney(it, targetMinorUnits) } ?: "-",
                         emphasised = true,
                     )
                 }

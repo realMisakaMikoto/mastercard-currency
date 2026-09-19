@@ -20,6 +20,12 @@ data class Currency(
     val countryEn: String,
     val symbol: String = "",
     val aliases: List<String> = emptyList(),
+    /**
+     * ISO 4217 minor units (decimal places): 0 for JPY/KRW, 3 for KWD/BHD, 2 for
+     * most. Converted amounts must be rounded and displayed with the TARGET
+     * currency's precision, not a fixed two digits.
+     */
+    val minorUnits: Int = DEFAULT_MINOR_UNITS,
 ) {
     val flag: String by lazy { flagOf(cc) }
 
@@ -39,6 +45,8 @@ data class Currency(
     val subtitle: String get() = "$nameZh · $countryZh"
 
     companion object {
+        const val DEFAULT_MINOR_UNITS = 2
+
         fun flagOf(cc: String): String {
             val c = cc.trim().uppercase()
             if (c.length != 2 || c.any { it !in 'A'..'Z' }) return "\uD83C\uDFF3"

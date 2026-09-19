@@ -33,6 +33,7 @@ class CurrencyRepository(private val context: Context) {
                 countryEn = o.optString("countryEn", ""),
                 symbol = o.optString("symbol", ""),
                 aliases = aliases,
+                minorUnits = o.optInt("minorUnits", Currency.DEFAULT_MINOR_UNITS),
             )
         }
         return out
