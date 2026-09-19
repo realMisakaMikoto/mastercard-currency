@@ -53,5 +53,14 @@ Android 8.0（API 26）及以上。若已装过其他签名的版本，需先卸
 ## 校验
 
 ```
-SHA-256  <见下方附件说明>
+SHA-256 (mastercard-currency-1.5.0.apk)
+4aef025befddd9493b37f8c819391e1f8cf54e9f6b96efcc401c3b035c38c49f
 ```
+
+```powershell
+# Windows
+Get-FileHash .\mastercard-currency-1.5.0.apk -Algorithm SHA256
+```
+
+APK 由本地私钥签名（APK Signature Scheme v2），私钥不在仓库中；
+因此其他人无法签出能覆盖升级的更新包。
